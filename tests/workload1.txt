@@ -1,0 +1,11 @@
+# The classic "convoy effect" example.
+#
+# P1 is a long process that arrives first, so FCFS makes the three short
+# processes behind it wait for 8 time units before they get any CPU at all.
+# MLFQ lets the short ones through much sooner.
+#
+# name  arrival  burst
+P1      0        8
+P2      1        4
+P3      2        9
+P4      3        2

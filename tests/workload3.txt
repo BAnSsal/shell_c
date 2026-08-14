@@ -1,0 +1,10 @@
+# A workload where the CPU has nothing to do for a while.
+#
+# X finishes at time 2, but Y does not arrive until time 8, so the CPU is idle
+# for six time units. Both programs show that as an "idle" block in the Gantt
+# chart, and CPU utilisation drops below 100%.
+#
+# name  arrival  burst
+X       0        2
+Y       8        3
+Z       9        1

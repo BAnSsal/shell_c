@@ -1,0 +1,14 @@
+# A workload with one very long process and two late arrivals.
+#
+# LONG is long enough to be demoted all the way down to the lowest MLFQ queue.
+# C and D arrive at time 12 and 13, while LONG is sitting in the bottom queue,
+# so they preempt it (rule R4) and finish immediately. The priority boost at
+# time 15 then rescues LONG from the bottom queue.
+# Under FCFS, C and D instead have to wait for all 20 units of LONG.
+#
+# name  arrival  burst
+A       0        3
+B       1        1
+LONG    2        20
+C       12       2
+D       13       1
