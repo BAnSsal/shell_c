@@ -223,24 +223,6 @@ fcfs_idle=$($SCHED_BIN fcfs tests/workload3.txt)
 contains "FCFS shows an idle block when nothing has arrived" "idle" "$fcfs_idle"
 
 echo
-echo "=== MLFQ ==="
-
-mlfq_out=$($SCHED_BIN mlfq tests/workload1.txt)
-
-contains "MLFQ demotes a process that uses its whole slice" \
-         "demoted to Q1" "$mlfq_out"
-contains "MLFQ boosts priorities periodically" \
-         "priority boost" "$mlfq_out"
-contains "MLFQ response time (1.50) beats FCFS (8.75)" \
-         "average response time   : 1.50" "$mlfq_out"
-
-mlfq_out2=$($SCHED_BIN mlfq tests/workload2.txt)
-contains "MLFQ preempts a low-priority process when work arrives" \
-         "preempted" "$mlfq_out2"
-contains "MLFQ finishes the short late arrival quickly" \
-         "C finished" "$mlfq_out2"
-
-echo
 echo "=== SJF (shortest job first) ==="
 
 sjf_out=$($SCHED_BIN sjf tests/workload1.txt)
@@ -300,6 +282,24 @@ contains "the least important process (BG) is served last" \
 contains "without a priority column, priority scheduling equals FCFS" \
          "average turnaround time : 14.50" \
          "$($SCHED_BIN priority tests/workload1.txt)"
+
+echo
+echo "=== MLFQ ==="
+
+mlfq_out=$($SCHED_BIN mlfq tests/workload1.txt)
+
+contains "MLFQ demotes a process that uses its whole slice" \
+         "demoted to Q1" "$mlfq_out"
+contains "MLFQ boosts priorities periodically" \
+         "priority boost" "$mlfq_out"
+contains "MLFQ response time (1.50) beats FCFS (8.75)" \
+         "average response time   : 1.50" "$mlfq_out"
+
+mlfq_out2=$($SCHED_BIN mlfq tests/workload2.txt)
+contains "MLFQ preempts a low-priority process when work arrives" \
+         "preempted" "$mlfq_out2"
+contains "MLFQ finishes the short late arrival quickly" \
+         "C finished" "$mlfq_out2"
 
 echo
 echo "=== compare mode ==="

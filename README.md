@@ -3,17 +3,19 @@
 A small Operating Systems project in C, written to be **read and understood
 line by line**, not just executed.
 
-It contains three programs:
+It contains two programs:
 
-| program     | what it is                                                                  | source                                 |
-| ----------- | --------------------------------------------------------------------------- | -------------------------------------- |
-| `bin/mysh`  | a tiny Linux shell: runs commands, pipes, redirection, background jobs      | `src/shell.c`                          |
-| `bin/fcfs`  | a First Come First Served CPU scheduling simulation                         | `src/fcfs.c`                           |
-| `bin/mlfq`  | a Multi-Level Feedback Queue CPU scheduling simulation                       | `src/mlfq.c`                           |
+| program     | what it is                                                              | source            |
+| ----------- | ----------------------------------------------------------------------- | ----------------- |
+| `bin/mysh`  | a tiny Linux shell: commands, pipes, redirection, background jobs       | `src/shell.c`     |
+| `bin/sched` | a CPU scheduling simulator with six algorithms and a comparison mode    | `src/sched.c` + `src/algo_*.c` |
+
+The six scheduling algorithms are FCFS, SJF, SRTF, Round Robin, Priority and
+MLFQ. Each one lives in its own small file so they can be read side by side.
 
 Everything is plain C11 with the standard POSIX library. No external
-dependencies, no frameworks, about 1,500 lines of code in total, and roughly
-half of those lines are comments explaining *why* the code is written that way.
+dependencies, no frameworks, about 2,200 lines in total, and roughly half of
+those lines are comments explaining *why* the code is written that way.
 
 ---
 
@@ -24,19 +26,22 @@ half of those lines are comments explaining *why* the code is written that way.
 3. [The operating-system ideas you need first](#3-the-operating-system-ideas-you-need-first)
 4. [Part 1 — the shell, line by line](#4-part-1--the-shell-line-by-line)
 5. [Part 2 — FCFS, line by line](#5-part-2--fcfs-line-by-line)
-6. [Part 3 — MLFQ, line by line](#6-part-3--mlfq-line-by-line)
-7. [FCFS vs MLFQ — what the numbers say](#7-fcfs-vs-mlfq--what-the-numbers-say)
-8. [Development log: every command I ran, every problem I hit](#8-development-log-every-command-i-ran-every-problem-i-hit)
-9. [Testing](#9-testing)
-10. [Questions you may be asked, with answers](#10-questions-you-may-be-asked-with-answers)
-11. [Limitations and ideas for version 2](#11-limitations-and-ideas-for-version-2)
+6. [Part 3 — SJF and SRTF, line by line](#6-part-3--sjf-and-srtf-line-by-line)
+7. [Part 4 — Round Robin, line by line](#7-part-4--round-robin-line-by-line)
+8. [Part 5 — Priority scheduling, line by line](#8-part-5--priority-scheduling-line-by-line)
+9. [Part 6 — MLFQ, line by line](#9-part-6--mlfq-line-by-line)
+10. [Comparing all six algorithms](#10-comparing-all-six-algorithms)
+11. [Development log: every command I ran, every problem I hit](#11-development-log-every-command-i-ran-every-problem-i-hit)
+12. [Testing](#12-testing)
+13. [Questions you may be asked, with answers](#13-questions-you-may-be-asked-with-answers)
+14. [Limitations and ideas for version 2](#14-limitations-and-ideas-for-version-2)
 
 ---
 
 ## 1. Quick start
 
 ```bash
-# build all three programs into bin/
+# build both programs into bin/
 make
 
 # 1) the shell
@@ -49,33 +54,41 @@ mysh:/home/you/shell_c$ sleep 3 &
 mysh:/home/you/shell_c$ help
 mysh:/home/you/shell_c$ exit
 
-# 2) FCFS on the sample workload
-./bin/fcfs tests/workload1.txt
+# 2) one scheduling algorithm at a time
+./bin/sched fcfs     tests/workload1.txt
+./bin/sched sjf      tests/workload1.txt
+./bin/sched srtf     tests/workload1.txt
+./bin/sched rr -q 3  tests/workload1.txt
+./bin/sched priority tests/workload4.txt
+./bin/sched mlfq     tests/workload1.txt
 
-# 3) MLFQ on the same workload, so the two can be compared
-./bin/mlfq tests/workload1.txt
+# 3) all six on the same workload, with a summary table
+./bin/sched compare tests/workload1.txt
 
-# 4) run the automated tests (46 checks)
+# 4) run the automated tests (87 checks)
 make test
 ```
 
-Other useful targets:
+`sched` options:
+
+```bash
+./bin/sched --help                        # every algorithm and option
+./bin/sched rr -q 1 tests/workload1.txt   # Round Robin quantum (default 3)
+./bin/sched fcfs --quiet tests/workload1.txt   # metrics only, no charts
+./bin/sched sjf --csv tests/workload1.txt > sjf.csv        # for a spreadsheet
+./bin/sched compare --csv tests/workload1.txt > all.csv    # every algorithm
+./bin/sched fcfs                          # built-in example workload
+printf 'P1 0 5\nP2 1 3\n' | ./bin/sched srtf -   # workload from stdin
+```
+
+Make targets:
 
 ```bash
 make run-shell     # build if needed, then start the shell
 make run-fcfs      # FCFS on tests/workload1.txt
 make run-mlfq      # MLFQ on tests/workload1.txt
+make run-compare   # all six algorithms side by side
 make clean         # delete bin/
-```
-
-Both schedulers accept a workload file, `-` for standard input, or nothing at
-all (in which case a built-in example is used):
-
-```bash
-./bin/fcfs                       # built-in example workload
-./bin/mlfq tests/workload2.txt   # from a file
-printf 'P1 0 5\nP2 1 3\n' | ./bin/fcfs -   # from standard input
-./bin/mlfq --help                # explains the file format
 ```
 
 ---
@@ -88,21 +101,35 @@ printf 'P1 0 5\nP2 1 3\n' | ./bin/fcfs -   # from standard input
 ├── README.md                 this document
 ├── src
 │   ├── shell.c               the whole shell (one file, 5 clearly marked parts)
-│   ├── scheduler.h           the types and helpers the two schedulers share
-│   ├── scheduler_common.c    workload loading, Gantt chart, timeline, metrics
-│   ├── fcfs.c                the FCFS algorithm + its main()
-│   └── mlfq.c                the MLFQ algorithm + its main()
+│   ├── sched.c               the simulator's command line + comparison mode
+│   ├── scheduler.h           the types every algorithm shares
+│   ├── scheduler_common.c    workload loading, metrics, Gantt chart, timeline
+│   ├── algo_fcfs.c           First Come First Served
+│   ├── algo_sjf.c            Shortest Job First (non-preemptive)
+│   ├── algo_srtf.c           Shortest Remaining Time First (preemptive)
+│   ├── algo_rr.c             Round Robin
+│   ├── algo_priority.c       Priority scheduling
+│   └── algo_mlfq.c           Multi-Level Feedback Queue
 └── tests
-    ├── run_tests.sh          46 automated checks
+    ├── run_tests.sh          87 automated checks
     ├── workload1.txt         the classic "convoy effect" workload
     ├── workload2.txt         one very long process + two late arrivals
-    └── workload3.txt         a workload that leaves the CPU idle
+    ├── workload3.txt         a workload that leaves the CPU idle
+    └── workload4.txt         a workload with priorities, for `sched priority`
 ```
 
-Why `scheduler_common.c` exists: FCFS and MLFQ differ *only* in how they choose
-the next process. Reading the workload and printing the results is identical, so
-that code lives in one place. The result is that `fcfs.c` and `mlfq.c` contain
-almost nothing but the algorithm itself, which makes them easy to compare.
+Two design decisions worth knowing before reading the code:
+
+- **One binary, one file per algorithm.** Every algorithm needs the same
+  surrounding work — read the workload, run it, print the chart and the
+  metrics — so that lives once in `sched.c` and `scheduler_common.c`. Each
+  `algo_*.c` file then contains nothing but its own scheduling decision, which
+  is what makes the six comparable at a glance.
+- **`scheduler.h` is the contract.** Every algorithm is a function that takes
+  the process array, fills in `start_time` and `finish_time`, records which
+  process ran during which time unit, and returns how many slices it recorded.
+  Nothing else. Adding a seventh algorithm means writing one such function and
+  adding one line to the table in `sched.c`.
 
 ---
 
@@ -187,7 +214,7 @@ is the **write** end. Whatever is written to `fd[1]` can be read from `fd[0]`.
 The rule that traps everyone: **a reader only sees end-of-file when every copy
 of the write end is closed.** `fork()` duplicates descriptors, so after forking
 there are two copies of `fd[1]` — the child's and the parent's. If the parent
-forgets to close its copy, the reader waits forever. §8.6 shows that deadlock
+forgets to close its copy, the reader waits forever. §11.6 shows that deadlock
 actually happening.
 
 ---
@@ -242,7 +269,7 @@ Line by line:
 - `isatty(STDIN_FILENO)` asks "is my input a real terminal?". When you pipe a
   script into the shell (`echo 'ls' | ./bin/mysh`) the answer is no, so the
   prompt is skipped. Without this the test output would be full of prompts.
-- `setvbuf(..., _IOLBF, 0)` makes our own output flush at every newline. §8.3
+- `setvbuf(..., _IOLBF, 0)` makes our own output flush at every newline. §11.3
   explains the bug that forced this line to exist.
 - `signal(SIGINT, SIG_IGN)` makes the **shell** ignore Ctrl-C. Children put the
   default behaviour back (§4.8), so Ctrl-C kills the running command and leaves
@@ -403,7 +430,7 @@ for (int i = 0; i <= ntoks; i++) {
 The loop condition is `i <= ntoks`, one past the end, so the final stage (which
 is not followed by a `|`) is parsed by the same code as all the others.
 `start == i` means the stage is empty — that check is the fix for a real bug
-described in §8.5.
+described in §11.5.
 
 `&` is handled separately, and only in the last position:
 
@@ -542,7 +569,7 @@ for (i = 0; i < ncmds; i++) {
 
     if (i < ncmds - 1 && pipe(fd) < 0) { perror("mysh: pipe"); break; }
 
-    fflush(stdout);                     /* see §8.3 */
+    fflush(stdout);                     /* see §11.3 */
 
     pid_t pid = fork();
     if (pid < 0) { perror("mysh: fork"); ...close fds...; break; }
@@ -583,7 +610,7 @@ The important details, in order of how easy they are to get wrong:
 1. **`close(fd[1])` in the parent.** The child inherited a copy of the write
    end, so two copies exist. `wc -l` keeps waiting for more input until *all*
    copies are closed. Leave this line out and `echo hi | wc -l` hangs forever —
-   §8.6 shows the experiment.
+   §11.6 shows the experiment.
 2. **`close(prev_read)` in the parent** after each fork, for the same reason on
    the read side, and to avoid running out of descriptors on long pipelines.
 3. **The child closes the ends it does not use** (`close(fd[0])`), so it does not
@@ -693,7 +720,7 @@ exit codes (0, 1, 2, 126, 127, 128+signal).
 
 Not supported in version 1, on purpose: variables and `$?` expansion (use the
 `status` built-in), globbing (`*.c`), `&&`, `||`, `;`, `2>`, `2>&1`, here-docs,
-command substitution, `fg`/`bg`/`jobs`, and history with the arrow keys. §11
+command substitution, `fg`/`bg`/`jobs`, and history with the arrow keys. §14
 lists these as version 2 work.
 
 ---
@@ -706,7 +733,7 @@ lists these as version 2 work.
 ever interrupted. It is the queue at a shop counter, and it is
 **non-preemptive** — once a process gets the CPU it keeps it until it is done.
 
-### 5.2 Input format
+### 5.2 Input format (shared by all six algorithms)
 
 `tests/workload1.txt`:
 
@@ -720,11 +747,16 @@ P4      3        2
 
 - **arrival** — the time unit at which the process shows up.
 - **burst** — how many time units of CPU it needs in total.
+- **priority** — an optional fourth column, used only by the `priority`
+  algorithm (see `tests/workload4.txt`). A smaller number means more important.
+  When the column is missing, every process gets priority 0.
 
 Blank lines and `#` comments are ignored. `load_workload()` in
-`scheduler_common.c` validates every line and refuses `arrival < 0` or
-`burst <= 0`, so a typo produces a clear message and exit status 1 instead of a
-nonsense simulation.
+`scheduler_common.c` validates every line and refuses `arrival < 0`,
+`burst <= 0` or `priority < 0`, so a typo produces a clear message and exit
+status 1 instead of a nonsense simulation. `workload_fits()` additionally
+refuses a workload that could not finish within `MAX_TIME` — §11.11 explains the
+bug that check exists to prevent.
 
 ### 5.3 The algorithm
 
@@ -802,7 +834,7 @@ Also printed:
 ### 5.5 Actual output
 
 ```
-$ ./bin/fcfs tests/workload1.txt
+$ ./bin/sched fcfs tests/workload1.txt
 Gantt chart
   +----+----+----+----+
   | P1 | P2 | P3 | P4 |
@@ -825,8 +857,8 @@ Results (FCFS)
   average turnaround time : 14.50
   average waiting time    : 8.75
   average response time   : 8.75
-  total time              : 23 (from 0 to 23)
-  CPU utilisation         : 100.0% (23 busy of 23)
+  total time              : 23 (23 busy, 0 idle)
+  CPU utilisation         : 100.0%
   throughput              : 0.174 processes per time unit
   context switches        : 3
 ```
@@ -842,9 +874,358 @@ it first runs is the moment it stops waiting.
 
 ---
 
-## 6. Part 3 — MLFQ, line by line
+## 6. Part 3 — SJF and SRTF, line by line
 
-### 6.1 The idea
+These two are the same idea in a non-preemptive and a preemptive form, which
+makes them the clearest possible demonstration of what preemption buys you.
+
+### 6.1 SJF — Shortest Job First (`src/algo_sjf.c`)
+
+Out of everything that has already arrived, run the process with the **smallest
+total burst**. Once it starts, it runs to completion.
+
+The whole algorithm is a choice function plus a loop. First the choice:
+
+```c
+static int pick_shortest(const struct process procs[], int n, int time)
+{
+    int best = -1;
+
+    for (int i = 0; i < n; i++) {
+        if (procs[i].arrival > time || procs[i].remaining == 0)
+            continue;
+        if (best < 0 ||
+            procs[i].burst < procs[best].burst ||
+            (procs[i].burst == procs[best].burst &&
+             procs[i].arrival < procs[best].arrival))
+            best = i;
+    }
+    return best;
+}
+```
+
+- `procs[i].arrival > time` skips processes that have not shown up yet — you
+  cannot schedule work that does not exist.
+- `procs[i].remaining == 0` skips the ones already finished.
+- `best < 0` handles the first candidate found; after that it is a plain
+  "smaller burst wins" comparison.
+- The last condition breaks ties by arrival time. Ties must be broken
+  *somehow*, and doing it deliberately is what makes the simulation
+  reproducible: run it twice, get the same Gantt chart.
+- Returning `-1` means "nothing is ready", which the caller turns into an idle
+  time unit.
+
+Then the loop:
+
+```c
+while (completed < n && time < MAX_TIME) {
+    int pick = pick_shortest(procs, n, time);
+
+    if (pick < 0) {                         /* nothing has arrived yet */
+        add_tick(segs, &nsegs, -1, time);
+        time++;
+        continue;
+    }
+
+    procs[pick].start_time = time;
+
+    while (procs[pick].remaining > 0) {     /* non-preemptive: run it all */
+        add_tick(segs, &nsegs, pick, time);
+        procs[pick].remaining--;
+        time++;
+    }
+
+    procs[pick].finish_time = time;
+    completed++;
+}
+```
+
+The inner `while` is the non-preemptive part: once chosen, a process is not
+reconsidered until it is finished. Processes arriving during that burst simply
+wait, and the next `pick_shortest()` call sees them.
+
+Output on the usual workload:
+
+```
+$ ./bin/sched sjf tests/workload1.txt
+Gantt chart
+  +----+----+----+----+
+  | P1 | P4 | P2 | P3 |
+  +----+----+----+----+
+  0    8    10   14   23
+
+  average turnaround time : 12.25
+  average waiting time    : 6.50
+  average response time   : 6.50
+  context switches        : 3
+```
+
+Compare with FCFS's `P1 P2 P3 P4`: at time 8, three processes are waiting and
+SJF picks P4 (burst 2) instead of P2 (burst 4). Average waiting time drops from
+8.75 to 6.50 for **exactly the same number of context switches**. That is the
+theorem worth remembering: among non-preemptive schedulers, shortest-job-first
+gives the best possible average waiting time.
+
+Two reasons no real operating system can do this:
+
+1. It needs the burst length **in advance**, and nothing tells the kernel how
+   long a program is going to compute for.
+2. A long process can be pushed back forever if short ones keep arriving. That
+   is **starvation**, and plain SJF has no defence against it.
+
+### 6.2 SRTF — Shortest Remaining Time First (`src/algo_srtf.c`)
+
+The preemptive version: re-decide at **every time unit**, and compare the time
+each process has *left* rather than its original burst.
+
+The choice function gains one parameter:
+
+```c
+static int pick_shortest_remaining(const struct process procs[], int n,
+                                   int time, int current)
+{
+    int best = -1;
+
+    if (current >= 0 && procs[current].remaining > 0)
+        best = current;                     /* the incumbent starts ahead */
+
+    for (int i = 0; i < n; i++) {
+        if (procs[i].arrival > time || procs[i].remaining == 0)
+            continue;
+        if (best < 0 || procs[i].remaining < procs[best].remaining)
+            best = i;
+    }
+    return best;
+}
+```
+
+Starting from `current` is a small trick with a real effect. The comparison is
+strictly `<`, so a process only loses the CPU to somebody **strictly** shorter.
+Without that, two processes with equal remaining time would swap places on every
+single time unit, inflating the context-switch count without changing anything
+else.
+
+The loop runs exactly one time unit per iteration:
+
+```c
+running = pick_shortest_remaining(procs, n, time, running);
+...
+if (procs[running].start_time < 0)
+    procs[running].start_time = time;   /* only the FIRST time it runs */
+
+add_tick(segs, &nsegs, running, time);
+procs[running].remaining--;
+time++;
+
+if (procs[running].remaining == 0) {
+    procs[running].finish_time = time;
+    completed++;
+    running = -1;
+}
+```
+
+`if (procs[running].start_time < 0)` matters in every preemptive algorithm: a
+process gets the CPU many times, but response time is measured from the *first*
+of those, so the field must only be written once.
+
+Output:
+
+```
+$ ./bin/sched srtf tests/workload1.txt
+Gantt chart
+  +----+----+----+----+----+
+  | P1 | P2 | P4 | P1 | P3 |
+  +----+----+----+----+----+
+  0    1    5    7    14   23
+
+  average turnaround time : 10.75
+  average waiting time    : 5.00
+  average response time   : 3.50
+  context switches        : 4
+```
+
+Read the chart: P1 starts, and one time unit later P2 arrives needing only 4
+units against P1's remaining 7 — so P1 is thrown off the CPU immediately and
+does not come back until t=7. **5.00 is the lowest average waiting time any
+scheduler can achieve on this workload**, which makes SRTF the yardstick the
+other five are measured against. It costs one extra context switch over SJF.
+
+Same two objections as SJF (needs the future, can starve long jobs), plus a
+third: on a real machine it would switch far more often, and each switch costs
+real time.
+
+---
+
+## 7. Part 4 — Round Robin, line by line
+
+`src/algo_rr.c`. Everybody takes turns. Each process gets at most `quantum`
+time units, and if it is not finished by then it goes to the **back** of the
+queue.
+
+Round Robin needs no knowledge of the future at all — which is exactly why it is
+usable in practice, and why MLFQ is built out of it.
+
+### 7.1 The tick loop, step by step
+
+```c
+while (completed < n && time < MAX_TIME) {
+    /* 1. admit everything that arrives at this instant */
+    for (int i = 0; i < n; i++)
+        if (procs[i].arrival == time)
+            q_push(&ready, i);
+
+    /* 2. has the running process used up its slice? */
+    if (running >= 0 && used == quantum) {
+        q_push(&ready, running);
+        running = -1;
+        used    = 0;
+    }
+
+    /* 3. nobody on the CPU: take the next process from the front */
+    if (running < 0 && !q_empty(&ready)) {
+        running = q_pop(&ready);
+        used    = 0;
+    }
+
+    /* 4. still nobody: the CPU is idle for this time unit */
+    if (running < 0) {
+        add_tick(segs, &nsegs, -1, time);
+        time++;
+        continue;
+    }
+
+    /* 5. run one time unit */
+    if (procs[running].start_time < 0)
+        procs[running].start_time = time;
+
+    add_tick(segs, &nsegs, running, time);
+    procs[running].remaining--;
+    used++;
+    time++;
+
+    if (procs[running].remaining == 0) {
+        procs[running].finish_time = time;
+        completed++;
+        running = -1;
+        used    = 0;
+    }
+}
+```
+
+The subtle part is the **order of steps 1 and 2**. A process that arrives at
+exactly the moment somebody's slice expires is queued *before* the preempted
+process, because arrivals are admitted first. That is the usual convention, and
+it genuinely changes the resulting chart — so it is worth being deliberate about
+rather than accidental.
+
+`used` counts how much of the current slice has been consumed. It is reset in
+three places (slice expiry, a fresh pick, and completion), and forgetting any one
+of them would let a process keep the CPU for longer than its quantum.
+
+The ready queue is the same circular buffer described in §9.3.
+
+### 7.2 The quantum is the whole trade-off
+
+Same workload, three different quanta:
+
+| quantum | avg turnaround | avg waiting | avg response | context switches |
+| ------- | -------------- | ----------- | ------------ | ---------------- |
+| 1       | 15.00          | 9.25        | **0.75**     | **20**           |
+| 3       | 15.75          | 10.00       | 3.00         | 8                |
+| 20      | **14.50**      | **8.75**    | 8.75         | **3**            |
+
+```bash
+./bin/sched rr -q 1  tests/workload1.txt --quiet
+./bin/sched rr -q 3  tests/workload1.txt --quiet
+./bin/sched rr -q 20 tests/workload1.txt --quiet
+```
+
+- **quantum 1** gives near-instant response (0.75) and 20 context switches. On a
+  real CPU each of those switches costs register saving, page-table work and a
+  cold cache, so this is where a real system starts spending more time switching
+  than computing.
+- **quantum 20** is larger than every burst in the workload, so no process is
+  ever preempted and the numbers become **identical to FCFS** — 14.50 / 8.75 /
+  8.75 with 3 switches. Round Robin with a large enough quantum *is* FCFS, and
+  the test suite asserts exactly that.
+- Notice that Round Robin's average waiting time (10.00) is *worse* than FCFS's
+  8.75 here. Round Robin is not trying to minimise waiting time; it is trying to
+  give everyone a turn quickly, and it succeeds — response time falls from 8.75
+  to 3.00.
+
+---
+
+## 8. Part 5 — Priority scheduling, line by line
+
+`src/algo_priority.c`. Run the most important process that has arrived, where
+"most important" means the **smallest priority number**.
+
+The priority comes from the optional fourth column of the workload file, so this
+is the only algorithm that reads `tests/workload4.txt` differently from the
+others:
+
+```
+# name  arrival  burst  priority
+LOW     0        6      3
+MID     1        4      2
+HIGH    2        3      1
+BG      3        5      4
+```
+
+The code is SJF with one word changed — `burst` becomes `priority`:
+
+```c
+if (best < 0 ||
+    procs[i].priority < procs[best].priority ||
+    (procs[i].priority == procs[best].priority &&
+     procs[i].arrival < procs[best].arrival))
+    best = i;
+```
+
+The tie-break on arrival means that equal priorities are served
+first-come-first-served, which is what makes the next observation possible: a
+workload with **no** priority column gives every process priority 0, so this
+algorithm becomes FCFS exactly. The test suite asserts that too — it is a good
+sanity check that the tie-breaking really works.
+
+Output:
+
+```
+$ ./bin/sched priority tests/workload4.txt
+Gantt chart
+  +-----+------+-----+----+
+  | LOW | HIGH | MID | BG |
+  +-----+------+-----+----+
+  0     6      9     13   18
+
+Results (PRIORITY)
+  process       arrival    burst    start   finish  turnaround  waiting  response
+  LOW                 0        6        0        6           6        0         0
+  MID                 1        4        9       13          12        8         8
+  HIGH                2        3        6        9           7        4         4
+  BG                  3        5       13       18          15       10        10
+
+  average turnaround time : 10.00
+  average waiting time    : 5.50
+```
+
+Two things to notice, and they are the two exam questions about this algorithm:
+
+1. **LOW runs first even though it is the least important.** At time 0 it is the
+   only process that has arrived, and this scheduler is non-preemptive: once
+   LOW has the CPU, the arrival of HIGH (priority 1) at time 2 cannot take it
+   away. A *preemptive* priority scheduler would interrupt LOW at t=2.
+2. **BG, the least important, is served last** — and if important work kept
+   arriving it would never be served at all. That is **starvation**. The usual
+   cure is **aging**: slowly improve the priority of anything that has been
+   waiting too long. MLFQ's periodic priority boost is that same idea, which
+   makes this the right place to start reading the next section.
+
+---
+
+## 9. Part 6 — MLFQ, line by line
+
+### 9.1 The idea
 
 A **Multi-Level Feedback Queue** does not know in advance which process is short
 and which is long, so it *learns from behaviour*: a process that keeps using its
@@ -863,7 +1244,7 @@ priority boost: every 15 time units, everything goes back to Q0
 Lower priority gets a *longer* slice, because a long job then wastes less time
 being switched in and out.
 
-### 6.2 The five rules, and the code that implements each
+### 9.2 The five rules, and the code that implements each
 
 **R1 — a new process enters the highest queue.**
 
@@ -980,7 +1361,7 @@ if (procs[running].remaining == 0) {
 }
 ```
 
-### 6.3 The queue data structure
+### 9.3 The queue data structure
 
 ```c
 struct queue {
@@ -1010,10 +1391,10 @@ wrap around, so pushing and popping thousands of times never runs off the end.
 A process is only ever in one queue at a time, so `MAX_PROCS` slots always
 suffice.
 
-### 6.4 Actual output, explained event by event
+### 9.4 Actual output, explained event by event
 
 ```
-$ ./bin/mlfq tests/workload1.txt
+$ ./bin/sched mlfq tests/workload1.txt
 Scheduling events
   t=0   P1 arrives, joins Q0
   t=1   P2 arrives, joins Q0
@@ -1046,8 +1427,8 @@ Results (MLFQ)
   average turnaround time : 14.50
   average waiting time    : 8.75
   average response time   : 1.50
-  total time              : 23 (from 0 to 23)
-  CPU utilisation         : 100.0% (23 busy of 23)
+  total time              : 23 (23 busy, 0 idle)
+  CPU utilisation         : 100.0%
   throughput              : 0.174 processes per time unit
   context switches        : 8
 ```
@@ -1080,65 +1461,105 @@ higher queue. Under FCFS, `C` would have had to wait for all 20 units of `LONG`.
 
 ---
 
-## 7. FCFS vs MLFQ — what the numbers say
+## 10. Comparing all six algorithms
 
-Same workload (`tests/workload1.txt`), same CPU, different scheduler:
-
-| metric                  | FCFS  | MLFQ  | who wins                       |
-| ----------------------- | ----- | ----- | ------------------------------ |
-| average turnaround time | 14.50 | 14.50 | tie                            |
-| average waiting time    | 8.75  | 8.75  | tie                            |
-| **average response time** | **8.75** | **1.50** | **MLFQ, by 5.8x**        |
-| P4 (shortest job) turnaround | 20 | 5   | MLFQ                           |
-| context switches        | 3     | 8     | FCFS                           |
-| CPU utilisation         | 100%  | 100%  | tie                            |
-
-And on `tests/workload2.txt`, where two short jobs arrive late while a very long
-one is running:
-
-| metric                  | FCFS  | MLFQ |
-| ----------------------- | ----- | ---- |
-| average turnaround time | 11.20 | 7.40 |
-| average waiting time    | 5.80  | 2.00 |
-| average response time   | 5.80  | 0.60 |
-| context switches        | 4     | 7    |
-
-What to take away:
-
-- **Total work does not change.** The CPU has the same amount of computing to
-  do, so with no idle time both schedulers finish the whole batch at t=23. On
-  workload 1 the averages of turnaround and waiting come out identical; MLFQ
-  moved the pain around (P1 waits longer so P4 waits much less) rather than
-  removing it.
-- **MLFQ transforms response time**, which is what an interactive user actually
-  feels. 8.75 to 1.50 is the difference between a terminal that stutters and one
-  that answers instantly.
-- **MLFQ helps short jobs at the expense of long ones.** P4's turnaround falls
-  from 20 to 5; P1's rises from 8 to 19.
-- **Nothing is free.** MLFQ needed 8 context switches instead of 3, and each one
-  costs real time in a real kernel (saving registers, swapping page tables,
-  losing cache warmth).
-- **FCFS is not useless** — it is simple, has almost no overhead, and can never
-  starve anyone. It is a bad fit for interactive systems, which is why every
-  desktop OS uses something MLFQ-like instead.
-
-Reproduce all of this with:
+`compare` runs every algorithm on the same workload and prints one table, which
+is the fastest way to see what each design choice actually costs:
 
 ```bash
-./bin/fcfs tests/workload1.txt | tail -12
-./bin/mlfq tests/workload1.txt | tail -12
-./bin/fcfs tests/workload2.txt | tail -12
-./bin/mlfq tests/workload2.txt | tail -12
+./bin/sched compare tests/workload1.txt
+```
+
+```
+Comparison (same workload, every algorithm)
+  algorithm   avg turnaround   avg waiting  avg response   switches  total time
+  FCFS                 14.50          8.75          8.75          3          23
+  SJF                  12.25          6.50          6.50          3          23
+  SRTF                 10.75          5.00          3.50          4          23
+  RR                   15.75         10.00          3.00          8          23
+  PRIORITY             14.50          8.75          8.75          3          23
+  MLFQ                 14.50          8.75          1.50          8          23
+
+  best average turnaround : SRTF (10.75)
+  best average waiting    : SRTF (5.00)
+  best average response   : MLFQ (1.50)
+  fewest context switches : FCFS (3)
+```
+
+And on `tests/workload2.txt`, where two short processes arrive late while a very
+long one is running:
+
+```
+  algorithm   avg turnaround   avg waiting  avg response   switches  total time
+  FCFS                 11.20          5.80          5.80          4          27
+  SJF                  11.00          5.60          5.60          4          27
+  SRTF                  6.80          1.40          0.60          6          27
+  RR                    7.40          2.00          1.40          5          27
+  PRIORITY             11.20          5.80          5.80          4          27
+  MLFQ                  7.40          2.00          0.60          7          27
+```
+
+### What the numbers actually tell you
+
+- **Total time never changes** (23 on workload 1, 27 on workload 2). The CPU has
+  the same amount of work to do whatever order it does it in, so with no idle
+  time every algorithm finishes the batch at the same instant. A scheduler
+  cannot create throughput out of nothing — it can only decide **who waits**.
+- **SRTF wins turnaround and waiting time, always.** That is not luck: shortest
+  remaining time first is provably optimal for average waiting time on one CPU.
+  It is the yardstick, not a practical option, because it needs to know burst
+  lengths in advance.
+- **MLFQ wins response time** (1.50 on workload 1, tied best at 0.60 on
+  workload 2) *without knowing anything in advance*. It only watches how much
+  CPU each process consumes. Getting near-optimal responsiveness from observed
+  behaviour instead of prophecy is the entire point of the design, and it is why
+  real kernels are built this way.
+- **PRIORITY equals FCFS on workloads 1 and 2** because those files have no
+  priority column, so every process ties at priority 0 and the arrival-order
+  tie-break takes over. Run `./bin/sched compare tests/workload4.txt` to see it
+  behave differently.
+- **Round Robin is inconsistent, and that is expected.** It is worse than FCFS
+  on waiting time on workload 1 (10.00 vs 8.75) and much better on workload 2
+  (2.00 vs 5.80). Round Robin does not optimise anything; it shares. Whether
+  that helps depends entirely on the workload — and on the quantum (§7.2).
+- **Responsiveness costs context switches.** The two best response times (MLFQ
+  and RR) also have the two highest switch counts (8 each on workload 1) against
+  FCFS's 3. In this simulation a switch is free; in a real kernel it costs
+  register saving, page-table work and a cold cache, which is why nobody uses a
+  1-unit quantum in production.
+- **FCFS is not useless.** It is trivial to implement, has the least overhead
+  possible, and can never starve anyone. It is simply a bad fit for interactive
+  use, which is the whole reason the other five exist.
+
+Which to use, summarised in one line each:
+
+| algorithm | use it when | avoid it when |
+| --------- | ----------- | ------------- |
+| FCFS      | batch jobs, simplicity matters most  | anyone is waiting at a terminal |
+| SJF       | burst lengths are known and short jobs matter | long jobs must not starve |
+| SRTF      | you want the theoretical best waiting time | you are in the real world |
+| RR        | fair sharing with no knowledge of the future | switching is expensive |
+| Priority  | some work genuinely matters more | low-priority work must still finish |
+| MLFQ      | interactive systems (this is what real kernels do) | you need predictable, provable timing |
+
+Reproduce everything above with:
+
+```bash
+./bin/sched compare tests/workload1.txt   # the convoy-effect workload
+./bin/sched compare tests/workload2.txt   # long job + late short arrivals
+./bin/sched compare tests/workload3.txt   # a workload with an idle CPU
+./bin/sched compare tests/workload4.txt   # priorities matter here
+./bin/sched compare --csv tests/workload1.txt > all.csv   # for a chart
 ```
 
 ---
 
-## 8. Development log: every command I ran, every problem I hit
+## 11. Development log: every command I ran, every problem I hit
 
 This is the honest history of building version 1, kept because the mistakes are
 more instructive than the finished code.
 
-### 8.0 Setting up
+### 11.0 Setting up
 
 ```bash
 mkdir -p src tests bin
@@ -1146,7 +1567,7 @@ gcc --version                     # gcc (Ubuntu 13.3.0) 13.3.0
 make --version                    # GNU Make 4.3
 ```
 
-### 8.1 Problem: `O_RDONLY undeclared`
+### 11.1 Problem: `O_RDONLY undeclared`
 
 First compile of the shell:
 
@@ -1175,7 +1596,7 @@ a different, higher-level thing.
 `#include`, not a missing library. `man 2 open` names the header in its
 SYNOPSIS.
 
-### 8.2 Problem: `implicit declaration of function 'getline'`
+### 11.2 Problem: `implicit declaration of function 'getline'`
 
 The same compile also said:
 
@@ -1202,7 +1623,7 @@ already expanded by then.
 The alternative is `-std=gnu11`, which turns everything on; being explicit is
 more honest about what the code needs.
 
-### 8.3 Problem: my own output came out in the wrong order
+### 11.3 Problem: my own output came out in the wrong order
 
 With both fixes the shell compiled and ran. Testing it non-interactively:
 
@@ -1248,7 +1669,7 @@ B
 **Lesson.** stderr is unbuffered, stdout is not. Mixed output that "looks
 shuffled" is a buffering bug, not a logic bug.
 
-### 8.4 Problem: quotes did not work at all
+### 11.4 Problem: quotes did not work at all
 
 The first version split words with `strtok(line, " \t\n")`. Then:
 
@@ -1287,7 +1708,7 @@ hello   world
 anything with quoting rules, and it has two more traps: it modifies the string
 in place, and it keeps hidden state, so you cannot use it in nested loops.
 
-### 8.5 Problem: `| wc -l` silently ran instead of failing
+### 11.5 Problem: `| wc -l` silently ran instead of failing
 
 Testing bad input against the `strtok()` version:
 
@@ -1331,7 +1752,7 @@ mysh: syntax error near '&' (it must be the last thing on the line)
 Always test the *invalid* inputs; this bug only showed up because I typed
 nonsense on purpose.
 
-### 8.6 Experiment: what happens if the parent does not close the pipe
+### 11.6 Experiment: what happens if the parent does not close the pipe
 
 I wanted proof of why `close(fd[1])` matters, so I broke a copy of the shell on
 purpose:
@@ -1360,7 +1781,7 @@ deadlock.
 processes, immediately after `fork()`. This one line is the most common bug in
 student shells.
 
-### 8.7 Problem: a test assertion that was wrong, not the code
+### 11.7 Problem: a test assertion that was wrong, not the code
 
 ```bash
 make test
@@ -1372,7 +1793,9 @@ make test
         actual:   [4]
 ```
 
-**Cause.** My check was `printf 'ONE 0 1\n' | ./bin/fcfs - | grep -c 'ONE'`.
+**Cause.** My check was `printf 'ONE 0 1\n' | ./bin/fcfs - | grep -c 'ONE'`
+(at this point FCFS was still its own binary; today the same run is
+`./bin/sched fcfs -`).
 The name `ONE` legitimately appears four times in the output (workload table,
 timeline, results table, Gantt chart), so `grep -c` returned 4. The program was
 right; the test was lazy.
@@ -1388,7 +1811,7 @@ contains "the workload can be read from standard input" \
 **Lesson.** When a test fails, first ask whether the test is wrong. Assertions
 should check behaviour, not incidental text.
 
-### 8.8 Problem: a comment that described output the program never produced
+### 11.8 Problem: a comment that described output the program never produced
 
 `tests/workload2.txt` originally claimed "the CPU is idle between time 4 and
 12". Running it disproved that immediately — the long process `LONG` covers that
@@ -1399,7 +1822,7 @@ at t=12 and the priority boost at t=15) and added `tests/workload3.txt`, which
 really does leave the CPU idle:
 
 ```bash
-./bin/fcfs tests/workload3.txt
+./bin/sched fcfs tests/workload3.txt
 ```
 
 ```
@@ -1408,22 +1831,22 @@ really does leave the CPU idle:
   +---+------+---+---+
   0   2      8   11  12
   ...
-  CPU utilisation         : 50.0% (6 busy of 12)
+  CPU utilisation         : 50.0%
 ```
 
 **Lesson.** Verify comments against real output. A confidently wrong comment is
 worse than no comment.
 
-### 8.9 Small cleanups along the way
+### 11.9 Small cleanups along the way
 
-- Renamed a local variable from `new` to `next_q` in `mlfq.c`. It is legal in C
+- Renamed a local variable from `new` to `next_q` in the MLFQ code. It is legal in C
   but a reserved word in C++, and gratuitous incompatibility is not worth it.
 - Replaced `atoi()` with `sscanf()`-based parsing plus range checks in the
   workload loader, so bad input is reported instead of silently becoming 0.
 - Used `%11s` in the workload `sscanf()` so a very long process name cannot
   overflow `name[12]`.
 
-### 8.10 Checking for memory errors
+### 11.10 Checking for memory errors
 
 `valgrind` is not installed in this environment, so I used the compiler's
 sanitizers instead, which catch buffer overflows, use-after-free, leaks and
@@ -1431,38 +1854,183 @@ undefined behaviour at run time:
 
 ```bash
 gcc -Wall -Wextra -std=c11 -g -fsanitize=address,undefined -o /tmp/san/mysh src/shell.c
-gcc -Wall -Wextra -std=c11 -g -fsanitize=address,undefined -o /tmp/san/fcfs src/fcfs.c src/scheduler_common.c
-gcc -Wall -Wextra -std=c11 -g -fsanitize=address,undefined -o /tmp/san/mlfq src/mlfq.c src/scheduler_common.c
+gcc -Wall -Wextra -std=c11 -g -fsanitize=address,undefined -o /tmp/san/sched \
+    src/sched.c src/scheduler_common.c src/algo_*.c
 
 printf 'echo hi\nls | wc -l\ncd /tmp\npwd\nnosuch\nstatus\n| wc\necho "x\nexit 3\n' | /tmp/san/mysh
-/tmp/san/fcfs tests/workload1.txt > /dev/null
-/tmp/san/mlfq tests/workload2.txt > /dev/null
-printf 'A 0 1\n' | /tmp/san/fcfs -   > /dev/null
-/tmp/san/fcfs /nope 2>/dev/null
+
+# every algorithm against every workload, plus the awkward cases
+for a in fcfs sjf srtf rr priority mlfq compare; do
+    for w in tests/workload*.txt; do /tmp/san/sched $a $w > /dev/null; done
+done
+/tmp/san/sched rr -q 1 tests/workload1.txt > /dev/null    # 20 context switches
+/tmp/san/sched rr -q 500 tests/workload1.txt > /dev/null  # quantum > every burst
+/tmp/san/sched compare --csv > /dev/null
+/tmp/san/sched fcfs /nope 2>/dev/null                     # error path
+printf 'A 0 1 9\n' | /tmp/san/sched priority - > /dev/null
 ```
 
 No sanitizer reports and no leaks, including on the error paths. If you have
-valgrind available, `valgrind --leak-check=full ./bin/fcfs tests/workload1.txt`
+valgrind available, `valgrind --leak-check=full ./bin/sched compare tests/workload1.txt`
 gives the same answer.
 
-### 8.11 The full command list, in order
+### 11.11 Problem: an over-long workload printed nonsense instead of an error
+
+While adding the new algorithms I tried a workload bigger than the built-in
+simulation limit (`MAX_TIME` is 512):
+
+```bash
+printf 'X 0 400\nY 1 400\n' | ./bin/sched srtf - --quiet
+```
+
+```
+  process       arrival    burst    start   finish  turnaround  waiting  response
+  X                   0      400        0      400         400        0         0
+  Y                   1      400      400       -1          -2     -402       399
+
+  average waiting time    : -201.00
+  CPU utilisation         : 156.2%
+```
+
+**Cause.** Every tick-based algorithm loops `while (completed < n && time <
+MAX_TIME)`. When the limit is hit the loop just stops, so the unfinished process
+keeps `finish_time == -1`, and `-1 - arrival` becomes a negative turnaround that
+poisons every average. A waiting time of -201 and 156% CPU utilisation are
+impossible, and nothing said so.
+
+**Fix.** Check *before* simulating instead of hoping. The latest any
+work-conserving scheduler can finish is `(latest arrival) + (sum of all
+bursts)`, so that upper bound is computed once in `workload_fits()`:
+
+```c
+if (latest_arrival + total_burst > MAX_TIME) {
+    fprintf(stderr, "error: this workload can run until time %d, but the "
+                    "simulator is built for %d time units\n",
+            latest_arrival + total_burst, MAX_TIME);
+    return 0;
+}
+```
+
+```
+error: this workload can run until time 801, but the simulator is built for 512 time units
+       (raise MAX_TIME in src/scheduler.h and rebuild if you really need this)
+```
+
+**Lesson.** An impossible number in the output (a negative wait, utilisation over
+100%) is a gift — it makes a silent truncation visible. Better still is to reject
+input you cannot handle at the point where you can still explain why.
+
+### 11.12 Problem: a test whose pattern matched one line too many
+
+```
+  FAIL  compare gives every algorithm the same total time
+        expected: [1]
+        actual:   [2]
+```
+
+The check ran `compare` and asserted that the last column (total time) was the
+same on every row, because that is the cheap way to catch the copy bug described
+in §11.13.
+
+**Cause.** My pattern was `awk '/^  (FCFS|SJF|SRTF|RR|PRIORITY|MLFQ)/ {print
+$NF}'`, and the closing note under the table begins "SRTF is the theoretical
+best...". That line matched too, contributing the word `it` as a seventh value.
+
+**Fix.** Match the shape of a data row rather than its first word — the second
+field of a real row is always a number like `14.50`:
+
+```bash
+awk '$2 ~ /^[0-9]+\.[0-9][0-9]$/ {print $NF}' | sort -u | wc -l
+```
+
+**Lesson.** Grepping prose is fragile. When you assert on program output, anchor
+on structure (field counts, number formats) instead of on words that might also
+appear in a sentence.
+
+### 11.13 The bug I designed out instead of debugging
+
+`compare` runs six algorithms over one workload, and the algorithms *destroy*
+what they read: they count `remaining` down to zero, overwrite `start_time` and
+`finish_time`, and FCFS even sorts the array. Handing the same array to the
+second algorithm would leave it with `remaining == 0` everywhere, so it would
+"finish" instantly and report beautiful, entirely fictional numbers.
+
+That is a nasty class of bug because the output still looks plausible. So rather
+than fix it later, `run_comparison()` gives each algorithm its own copy:
+
+```c
+struct process work[MAX_PROCS];
+memcpy(work, original, (size_t)n * sizeof *work);
+reset_processes(work, n);
+```
+
+and the test suite asserts the property that would break first — every algorithm
+must report the same total time, since the same work has to take the same amount
+of CPU:
+
+```
+ok "compare gives every algorithm the same total time" ...
+```
+
+**Lesson.** When you can name the wrong-looking-right failure in advance, write
+the invariant into a test straight away. Plausible wrong numbers are much harder
+to notice than a crash.
+
+### 11.14 Verifying the new algorithms without trusting the program
+
+Six algorithms produce a lot of numbers, and a simulator that is confidently
+wrong is worse than no simulator. So before running anything, I worked out
+workload 1 (P1 0/8, P2 1/4, P3 2/9, P4 3/2) on paper:
+
+| algorithm | expected order              | avg turnaround | avg waiting |
+| --------- | --------------------------- | -------------- | ----------- |
+| FCFS      | P1 P2 P3 P4                 | 14.50          | 8.75        |
+| SJF       | P1 P4 P2 P3                 | 12.25          | 6.50        |
+| SRTF      | P1 P2 P4 P1 P3              | 10.75          | 5.00        |
+| RR (q=3)  | P1 P2 P3 P4 P1 P2 P3 P1 P3  | 15.75          | 10.00       |
+| Priority  | (no priorities: as FCFS)    | 14.50          | 8.75        |
+
+`./bin/sched compare tests/workload1.txt` then matched all of it exactly,
+including the context-switch counts. Two further checks that do not depend on my
+arithmetic at all:
+
+- Round Robin with a quantum larger than every burst **must** produce exactly
+  FCFS's numbers, because nothing is ever preempted. `-q 20` does: 14.50 / 8.75 /
+  8.75 with 3 switches.
+- Priority scheduling on a workload with no priority column **must** produce
+  exactly FCFS's numbers, because every process ties and the tie-break is arrival
+  order. It does.
+
+Both are now assertions in the test suite. Properties like these are worth more
+than any single expected value, because they stay true if the workload changes.
+
+### 11.15 The full command list, in order
 
 ```bash
 mkdir -p src tests bin
-gcc -Wall -Wextra -std=c11 -o bin/mysh src/shell.c          # failed  (§8.1, §8.2)
+gcc -Wall -Wextra -std=c11 -o bin/mysh src/shell.c          # failed  (§11.1, §11.2)
 gcc -Wall -Wextra -std=c11 -o bin/mysh src/shell.c          # clean
-printf 'echo hello\npwd\nstatus\n' | ./bin/mysh             # found the ordering bug (§8.3)
+printf 'echo hello\npwd\nstatus\n' | ./bin/mysh             # found the ordering bug (§11.3)
 printf 'echo A\nnosuchcmd\nstatus\necho B\n' | ./bin/mysh > merged.log 2>&1
 python3   # inline pty script, shown below: Ctrl-C, background jobs (§4.9)
-make                                                        # builds all three programs
-./bin/fcfs tests/workload1.txt
-./bin/mlfq tests/workload1.txt
-./bin/mlfq tests/workload2.txt                              # preemption + boost
-./bin/fcfs tests/workload3.txt                              # idle CPU
+make                                                        # builds both programs
+./bin/sched fcfs tests/workload1.txt
+./bin/sched mlfq tests/workload1.txt
+./bin/sched mlfq tests/workload2.txt                        # preemption + boost
+./bin/sched fcfs tests/workload3.txt                        # idle CPU
 chmod +x tests/run_tests.sh
-make test                                                   # 45 pass, 1 bad test (§8.7)
+make test                                                   # 45 pass, 1 bad test (§11.7)
 make test                                                   # 46 pass
-gcc ... -fsanitize=address,undefined ...                    # memory checks (§8.10)
+gcc ... -fsanitize=address,undefined ...                    # memory checks (§11.10)
+
+# --- adding the other four algorithms (§11.11 onwards) ---
+./bin/sched compare tests/workload1.txt                     # checked against hand arithmetic
+./bin/sched rr -q 20 tests/workload1.txt --quiet            # must equal FCFS
+./bin/sched rr -q 1 tests/workload1.txt --quiet             # 20 switches
+./bin/sched priority tests/workload4.txt
+printf 'X 0 400\nY 1 400\n' | ./bin/sched srtf -           # found the MAX_TIME bug (§11.11)
+make test                                                   # 84 pass, 1 bad test (§11.12)
+make test                                                   # 87 pass
 ```
 
 The interactive Ctrl-C test needs a real terminal, which a pipe cannot provide,
@@ -1480,13 +2048,13 @@ os.write(fd, b"status\n")      # prints 130 = 128 + SIGINT
 
 ---
 
-## 9. Testing
+## 12. Testing
 
 ```bash
 make test
 ```
 
-46 checks, all passing:
+87 checks, all passing:
 
 ```
 === shell: running commands ===        4 checks   arguments, quoting, PATH lookup
@@ -1496,11 +2064,22 @@ make test
 === shell: built-ins ===               4 checks   cd, exit code, help, comments
 === shell: background jobs ===         1 check    pid is reported
 === FCFS ===                           5 checks   order, averages, utilisation, idle block
+=== SJF ===                            4 checks   picks the short job, 12.25 / 6.50
+=== SRTF ===                           4 checks   preemption point, best waiting time 5.00
+=== Round Robin ===                    5 checks   quantum 1 / 3 / 20, degenerates to FCFS
+=== Priority ===                       4 checks   ordering, starvation victim last, ties
 === MLFQ ===                           5 checks   demotion, boost, preemption, response time
-=== scheduler input validation ===     8 checks   missing file, bad fields, --help, stdin
+=== compare mode ===                  10 checks   all six listed, winners, fresh copies
+=== CSV output ===                     5 checks   header, rows, --quiet, compare --csv
+=== command line validation ===        5 checks   unknown algorithm/option, bad quantum
+=== scheduler input validation ===    12 checks   bad fields, priority, MAX_TIME, stdin
 -------------------------------------
-passed: 46   failed: 0
+passed: 87   failed: 0
 ```
+
+Every scheduling number asserted in that suite was computed by hand on paper
+first. That matters: a test that just records whatever the program printed will
+happily lock in a bug forever.
 
 The script is plain bash with two helpers — `ok` compares exact strings and
 `contains` looks for a substring — so adding a test is three lines. It exits
@@ -1520,7 +2099,7 @@ mysh$                   # press Ctrl-D to leave
 
 ---
 
-## 10. Questions you may be asked, with answers
+## 13. Questions you may be asked, with answers
 
 **Why can `cd` not be an external program?**
 `fork()` gives the child a copy of the parent's state. A child that calls
@@ -1548,7 +2127,7 @@ before each prompt for background jobs.
 **Why must the parent close the pipe's write end?**
 A reader sees end-of-file only when *every* copy of the write end is closed.
 `fork()` created a second copy in the parent, so if the parent keeps it, the
-reader blocks forever (demonstrated in §8.6).
+reader blocks forever (demonstrated in §11.6).
 
 **How does `2>&1`-style redirection work, and why is `>` different from `>>`?**
 Redirection is `dup2()`: make a standard descriptor refer to another open file.
@@ -1583,9 +2162,44 @@ With no idle CPU, the batch takes the same total time either way. MLFQ
 redistributes the waiting — the short job P4 goes from 20 to 5, the long job P1
 from 8 to 19 — and pays 8 context switches instead of 3.
 
+**Which algorithm gives the best average waiting time, and why can't we use it?**
+SRTF (shortest remaining time first) — 5.00 on workload 1, and that is provably
+optimal on a single CPU. It is unusable because it needs to know how long each
+process will run *before* running it, and because it preempts constantly.
+
+**What is the difference between SJF and SRTF?**
+SJF is non-preemptive and compares total bursts; SRTF is preemptive and compares
+*remaining* time, re-deciding at every time unit. On workload 1 that difference
+is worth 1.5 units of average waiting time and costs one extra context switch.
+
+**What happens to Round Robin if the quantum is very large? Very small?**
+Large: nothing is ever preempted, so it becomes FCFS exactly — `-q 20` reproduces
+FCFS's 14.50 / 8.75 / 8.75 with 3 switches. Small: response time approaches its
+best possible value (0.75 with `-q 1`) but context switches explode (20), and on
+real hardware each switch has a cost this simulation does not model.
+
+**Why is Round Robin's average waiting time worse than FCFS's on workload 1?**
+Because Round Robin is not trying to minimise waiting time; it shares the CPU so
+that everyone starts soon. Its response time is 3.00 against FCFS's 8.75. Picking
+a scheduler means choosing *which* metric you care about.
+
+**Why is preemptive priority scheduling different from what this project does?**
+This implementation is non-preemptive, so `tests/workload4.txt` runs LOW
+(priority 3) first simply because it arrived first and cannot be interrupted. A
+preemptive version would hand the CPU to HIGH the moment it arrived at t=2.
+
+**How do you fix starvation in a priority scheduler?**
+Aging: gradually raise the priority of anything that has been waiting a long
+time. MLFQ's periodic priority boost is the same idea with a fixed interval.
+
+**Your `compare` mode runs six algorithms over one workload. What is the trap?**
+The algorithms consume the workload — `remaining` counts to zero, FCFS sorts the
+array — so each one must get a fresh copy, otherwise every algorithm after the
+first "finishes" instantly and reports plausible nonsense (§11.13).
+
 ---
 
-## 11. Limitations and ideas for version 2
+## 14. Limitations and ideas for version 2
 
 Known limitations of version 1, all deliberate:
 
@@ -1595,8 +2209,10 @@ Known limitations of version 1, all deliberate:
   single command (not inside a pipeline). Fixed limits: 128 tokens, 64 arguments,
   16 pipeline stages.
 - **Schedulers:** a single CPU, integer time units, and processes that are pure
-  CPU (no I/O bursts, so nothing ever blocks). MLFQ's queue count, time slices
-  and boost interval are compile-time constants.
+  CPU (no I/O bursts, so nothing ever blocks). Priority scheduling is
+  non-preemptive and has no aging. MLFQ's queue count, time slices and boost
+  interval are compile-time constants (`src/algo_mlfq.c`), as are the limits of
+  16 processes and 512 time units (`src/scheduler.h`).
 
 Version 2, roughly in order of usefulness:
 
@@ -1608,19 +2224,25 @@ Version 2, roughly in order of usefulness:
 5. Glob expansion with `glob(3)`.
 6. Schedulers: I/O bursts, so a process can block and MLFQ can reward the
    interactive behaviour it is actually designed to detect.
-7. Command-line options for the schedulers (`--queues`, `--quantum`,
-   `--boost`) and a CSV export for plotting.
-8. A combined comparison mode that runs both algorithms on one workload and
-   prints a single table.
+7. Preemptive priority scheduling, and aging to cure its starvation.
+8. Command-line options for the MLFQ configuration (`--queues`, `--boost`)
+   instead of compile-time constants.
+9. Plot the `--csv` output automatically (gnuplot or a small Python script), so
+   the comparison becomes a chart rather than a table.
 
 ---
 
 ## Build details
 
+`make` runs exactly these two commands:
+
 ```bash
 gcc -Wall -Wextra -std=c11 -g -o bin/mysh src/shell.c
-gcc -Wall -Wextra -std=c11 -g -o bin/fcfs src/fcfs.c src/scheduler_common.c
-gcc -Wall -Wextra -std=c11 -g -o bin/mlfq src/mlfq.c src/scheduler_common.c
+
+gcc -Wall -Wextra -std=c11 -g -o bin/sched \
+    src/sched.c src/scheduler_common.c \
+    src/algo_fcfs.c src/algo_sjf.c src/algo_srtf.c \
+    src/algo_rr.c src/algo_priority.c src/algo_mlfq.c
 ```
 
 | flag              | why                                                     |
@@ -1631,3 +2253,15 @@ gcc -Wall -Wextra -std=c11 -g -o bin/mlfq src/mlfq.c src/scheduler_common.c
 
 The code compiles with **zero warnings** under those flags on gcc 13.3, and
 targets Linux (it uses POSIX: `fork`, `execvp`, `pipe`, `dup2`, `waitpid`).
+
+### Adding a seventh algorithm
+
+The structure is set up so this takes three small steps:
+
+1. Write `src/algo_yours.c` with one function that fills in `start_time` and
+   `finish_time` for every process and calls `add_tick()` for each time unit.
+2. Declare it in `src/scheduler.h` and add one line to the `algorithms[]` table
+   and the `run_algorithm()` chain in `src/sched.c`.
+3. Add the file to `SCHED_SRC` in the `Makefile`.
+
+It then appears in `--help`, in `compare`, and in the CSV output automatically.
