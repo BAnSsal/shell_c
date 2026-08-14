@@ -1,8 +1,8 @@
 /*
- * scheduler_common.c - workload loading and result printing
- * ---------------------------------------------------------
- * Shared by fcfs.c and mlfq.c so that both print their results in exactly the
- * same shape and can be compared line by line.
+ * scheduler_common.c - workload loading, metrics and result printing
+ * ------------------------------------------------------------------
+ * Shared by all six algorithms so that every one of them prints its results in
+ * exactly the same shape and can be compared line by line.
  */
 
 #include "scheduler.h"
@@ -15,21 +15,22 @@
 /* Reading the workload                                                     */
 /* ======================================================================== */
 
-/* Set the fields the simulation owns to their starting values. */
-static void init_process(struct process *p)
+void reset_processes(struct process procs[], int n)
 {
-    p->remaining   = p->burst;
-    p->queue       = 0;         /* everyone starts in the highest MLFQ queue */
-    p->start_time  = -1;        /* -1 means "has not run yet"                */
-    p->finish_time = -1;
+    for (int i = 0; i < n; i++) {
+        procs[i].remaining   = procs[i].burst;
+        procs[i].queue       = 0;   /* everyone starts in the highest queue  */
+        procs[i].start_time  = -1;  /* -1 means "has not run yet"            */
+        procs[i].finish_time = -1;
+    }
 }
 
 int load_workload(const char *path, struct process procs[], int max)
 {
     FILE *fp;
     char  line[256];
-    int   n       = 0;
-    int   lineno  = 0;
+    int   n      = 0;
+    int   lineno = 0;
 
     /* "-" is the usual Unix way of saying "read from standard input". */
     if (strcmp(path, "-") == 0) {
@@ -45,6 +46,8 @@ int load_workload(const char *path, struct process procs[], int max)
     while (fgets(line, sizeof line, fp) != NULL) {
         char name[NAME_LEN];
         int  arrival, burst;
+        int  priority = 0;      /* the 4th column is optional */
+        int  fields;
         int  i = 0;
 
         lineno++;
@@ -54,11 +57,15 @@ int load_workload(const char *path, struct process procs[], int max)
         if (line[i] == '\0' || line[i] == '#')
             continue;                   /* blank line or comment */
 
-        /* %11s stops one character before the end of name[] so a very long
-         * name cannot run off the end of the buffer. */
-        if (sscanf(line + i, "%11s %d %d", name, &arrival, &burst) != 3) {
+        /* %11s stops one character before the end of name[], so a very long
+         * name cannot run off the end of the buffer. sscanf() returns how many
+         * items it managed to convert: 3 without a priority, 4 with one. */
+        fields = sscanf(line + i, "%11s %d %d %d", name, &arrival, &burst,
+                        &priority);
+        if (fields != 3 && fields != 4) {
             fprintf(stderr, "error: %s line %d: expected "
-                            "\"name arrival burst\"\n", path, lineno);
+                            "\"name arrival burst [priority]\"\n",
+                    path, lineno);
             goto fail;
         }
         if (arrival < 0 || burst <= 0) {
@@ -67,15 +74,20 @@ int load_workload(const char *path, struct process procs[], int max)
                     path, lineno, arrival, burst);
             goto fail;
         }
+        if (priority < 0) {
+            fprintf(stderr, "error: %s line %d: priority must be >= 0 "
+                            "(got %d)\n", path, lineno, priority);
+            goto fail;
+        }
         if (n == max) {
             fprintf(stderr, "error: too many processes (limit is %d)\n", max);
             goto fail;
         }
 
         snprintf(procs[n].name, NAME_LEN, "%s", name);
-        procs[n].arrival = arrival;
-        procs[n].burst   = burst;
-        init_process(&procs[n]);
+        procs[n].arrival  = arrival;
+        procs[n].burst    = burst;
+        procs[n].priority = priority;
         n++;
     }
 
@@ -86,6 +98,7 @@ int load_workload(const char *path, struct process procs[], int max)
         fprintf(stderr, "error: %s contains no processes\n", path);
         return -1;
     }
+    reset_processes(procs, n);
     return n;
 
 fail:
@@ -96,24 +109,50 @@ fail:
 
 int load_demo_workload(struct process procs[])
 {
-    /* Chosen so that the two algorithms behave differently: P1 is a long job
-     * and P4 is a short one that arrives late, which FCFS makes wait for a
-     * long time and MLFQ lets finish quickly. */
-    static const struct { const char *name; int arrival, burst; } demo[] = {
-        {"P1", 0, 8},
-        {"P2", 1, 4},
-        {"P3", 2, 9},
-        {"P4", 3, 2},
+    /* Chosen so that the algorithms behave differently: P1 is a long job that
+     * arrives first, and P4 is a short one that arrives late. FCFS makes P4
+     * wait for everything; SJF, SRTF and MLFQ do not. */
+    static const struct {
+        const char *name;
+        int arrival, burst, priority;
+    } demo[] = {
+        {"P1", 0, 8, 2},
+        {"P2", 1, 4, 1},
+        {"P3", 2, 9, 3},
+        {"P4", 3, 2, 1},
     };
     int n = (int)(sizeof demo / sizeof demo[0]);
 
     for (int i = 0; i < n; i++) {
         snprintf(procs[i].name, NAME_LEN, "%s", demo[i].name);
-        procs[i].arrival = demo[i].arrival;
-        procs[i].burst   = demo[i].burst;
-        init_process(&procs[i]);
+        procs[i].arrival  = demo[i].arrival;
+        procs[i].burst    = demo[i].burst;
+        procs[i].priority = demo[i].priority;
     }
+    reset_processes(procs, n);
     return n;
+}
+
+int workload_fits(const struct process procs[], int n)
+{
+    int latest_arrival = 0;
+    int total_burst    = 0;
+
+    for (int i = 0; i < n; i++) {
+        if (procs[i].arrival > latest_arrival)
+            latest_arrival = procs[i].arrival;
+        total_burst += procs[i].burst;
+    }
+
+    if (latest_arrival + total_burst > MAX_TIME) {
+        fprintf(stderr, "error: this workload can run until time %d, but the "
+                        "simulator is built for %d time units\n",
+                latest_arrival + total_burst, MAX_TIME);
+        fprintf(stderr, "       (raise MAX_TIME in src/scheduler.h and rebuild "
+                        "if you really need this)\n");
+        return 0;
+    }
+    return 1;
 }
 
 /* ======================================================================== */
@@ -141,17 +180,78 @@ void add_tick(struct segment segs[], int *nsegs, int proc, int t)
 }
 
 /* ======================================================================== */
+/* Metrics                                                                  */
+/* ======================================================================== */
+
+/*
+ * The three per-process numbers, for one process:
+ *
+ *   turnaround = finish - arrival     total time from arriving to finishing
+ *   waiting    = turnaround - burst   the part of that spent NOT running
+ *   response   = start - arrival      how long before it first ran
+ *
+ * `waiting = turnaround - burst` works because every time unit between arrival
+ * and finish is either CPU time (exactly `burst` of them) or waiting.
+ */
+struct metrics compute_metrics(const struct segment segs[], int nsegs,
+                               const struct process procs[], int n)
+{
+    struct metrics m;
+    int    total_burst = 0;
+    int    end         = nsegs > 0 ? segs[nsegs - 1].end : 0;
+    int    idle        = 0;
+    int    switches    = 0;
+    int    last_proc   = -2;
+    double sum_t = 0, sum_w = 0, sum_r = 0;
+
+    memset(&m, 0, sizeof m);
+
+    for (int i = 0; i < n; i++) {
+        int turnaround = procs[i].finish_time - procs[i].arrival;
+
+        total_burst += procs[i].burst;
+        sum_t       += turnaround;
+        sum_w       += turnaround - procs[i].burst;
+        sum_r       += procs[i].start_time - procs[i].arrival;
+    }
+
+    /* A context switch is the CPU moving from one process to another. An idle
+     * gap on its own does not count as a switch. */
+    for (int i = 0; i < nsegs; i++) {
+        if (segs[i].proc < 0) {
+            idle += segs[i].end - segs[i].start;
+            continue;
+        }
+        if (last_proc != -2 && segs[i].proc != last_proc)
+            switches++;
+        last_proc = segs[i].proc;
+    }
+
+    m.avg_turnaround = n > 0 ? sum_t / n : 0.0;
+    m.avg_waiting    = n > 0 ? sum_w / n : 0.0;
+    m.avg_response   = n > 0 ? sum_r / n : 0.0;
+    m.total_time     = end;
+    m.idle_time      = idle;
+    m.switches       = switches;
+    m.utilisation    = end > 0 ? 100.0 * total_burst / end : 0.0;
+    m.throughput     = end > 0 ? (double)n / end : 0.0;
+    return m;
+}
+
+/* ======================================================================== */
 /* Printing                                                                 */
 /* ======================================================================== */
 
 void print_input(const struct process procs[], int n)
 {
     printf("Workload (%d processes)\n", n);
-    printf("  %-*s %8s %8s\n", NAME_LEN, "process", "arrival", "burst");
+    printf("  %-*s %8s %8s %9s\n", NAME_LEN, "process", "arrival", "burst",
+           "priority");
     for (int i = 0; i < n; i++)
-        printf("  %-*s %8d %8d\n", NAME_LEN, procs[i].name,
-               procs[i].arrival, procs[i].burst);
-    printf("\n");
+        printf("  %-*s %8d %8d %9d\n", NAME_LEN, procs[i].name,
+               procs[i].arrival, procs[i].burst, procs[i].priority);
+    printf("  (priority is only used by the 'priority' algorithm; "
+           "a smaller number means more important)\n\n");
 }
 
 /* The label that goes inside a Gantt block. */
@@ -169,8 +269,8 @@ void print_gantt(const struct segment segs[], int nsegs,
     printf("Gantt chart\n");
 
     /* Every block is printed as "| label |", so its width depends on the
-     * length of the label. The three loops below print the three lines of the
-     * chart using exactly the same widths, which is what keeps them aligned. */
+     * length of the label. The loops below print the four lines of the chart
+     * using exactly the same widths, which is what keeps them aligned. */
 
     /* top border */
     printf("  ");
@@ -245,13 +345,7 @@ void print_timeline(const struct segment segs[], int nsegs,
 void print_summary(const char *algorithm, const struct segment segs[],
                    int nsegs, const struct process procs[], int n)
 {
-    int total_burst = 0;
-    int end         = nsegs > 0 ? segs[nsegs - 1].end : 0;
-    int first       = nsegs > 0 ? segs[0].start : 0;
-    int switches    = 0;
-    int last_proc   = -2;
-
-    double sum_turnaround = 0, sum_waiting = 0, sum_response = 0;
+    struct metrics m = compute_metrics(segs, nsegs, procs, n);
 
     printf("Results (%s)\n", algorithm);
     printf("  %-*s %8s %8s %8s %8s %11s %8s %9s\n", NAME_LEN, "process",
@@ -259,44 +353,42 @@ void print_summary(const char *algorithm, const struct segment segs[],
            "response");
 
     for (int i = 0; i < n; i++) {
-        /* turnaround = total time from arriving to finishing
-         * waiting    = turnaround minus the CPU time it actually used
-         * response   = how long it waited before it first ran            */
         int turnaround = procs[i].finish_time - procs[i].arrival;
-        int waiting    = turnaround - procs[i].burst;
-        int response   = procs[i].start_time - procs[i].arrival;
 
         printf("  %-*s %8d %8d %8d %8d %11d %8d %9d\n", NAME_LEN,
                procs[i].name, procs[i].arrival, procs[i].burst,
                procs[i].start_time, procs[i].finish_time, turnaround,
-               waiting, response);
-
-        total_burst    += procs[i].burst;
-        sum_turnaround += turnaround;
-        sum_waiting    += waiting;
-        sum_response   += response;
-    }
-
-    /* A context switch is the CPU moving from one process to another. Idle
-     * gaps do not count as a switch by themselves. */
-    for (int i = 0; i < nsegs; i++) {
-        if (segs[i].proc < 0)
-            continue;
-        if (last_proc != -2 && segs[i].proc != last_proc)
-            switches++;
-        last_proc = segs[i].proc;
+               turnaround - procs[i].burst,
+               procs[i].start_time - procs[i].arrival);
     }
 
     printf("\n");
-    printf("  average turnaround time : %.2f\n", sum_turnaround / n);
-    printf("  average waiting time    : %.2f\n", sum_waiting / n);
-    printf("  average response time   : %.2f\n", sum_response / n);
-    printf("  total time              : %d (from %d to %d)\n",
-           end - first, first, end);
-    printf("  CPU utilisation         : %.1f%% (%d busy of %d)\n",
-           end > 0 ? 100.0 * total_burst / end : 0.0, total_burst, end);
+    printf("  average turnaround time : %.2f\n", m.avg_turnaround);
+    printf("  average waiting time    : %.2f\n", m.avg_waiting);
+    printf("  average response time   : %.2f\n", m.avg_response);
+    printf("  total time              : %d (%d busy, %d idle)\n",
+           m.total_time, m.total_time - m.idle_time, m.idle_time);
+    printf("  CPU utilisation         : %.1f%%\n", m.utilisation);
     printf("  throughput              : %.3f processes per time unit\n",
-           end > 0 ? (double)n / end : 0.0);
-    printf("  context switches        : %d\n", switches);
+           m.throughput);
+    printf("  context switches        : %d\n", m.switches);
     printf("\n");
+}
+
+void print_csv(const char *algorithm, const struct process procs[], int n,
+               int with_header)
+{
+    if (with_header)
+        printf("algorithm,process,arrival,burst,priority,start,finish,"
+               "turnaround,waiting,response\n");
+
+    for (int i = 0; i < n; i++) {
+        int turnaround = procs[i].finish_time - procs[i].arrival;
+
+        printf("%s,%s,%d,%d,%d,%d,%d,%d,%d,%d\n", algorithm, procs[i].name,
+               procs[i].arrival, procs[i].burst, procs[i].priority,
+               procs[i].start_time, procs[i].finish_time, turnaround,
+               turnaround - procs[i].burst,
+               procs[i].start_time - procs[i].arrival);
+    }
 }
