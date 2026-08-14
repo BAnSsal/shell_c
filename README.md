@@ -17,6 +17,12 @@ Everything is plain C11 with the standard POSIX library. No external
 dependencies, no frameworks, about 2,200 lines in total, and roughly half of
 those lines are comments explaining *why* the code is written that way.
 
+**Preparing for an interview or a viva?** [`QUESTIONS.md`](QUESTIONS.md) is a
+question bank built from this project: about 350 questions with answers, from
+"what does `fork()` return" through five hand-worked numerical problems to
+spot-the-bug snippets and the limitations you should be able to admit before
+being asked.
+
 ---
 
 ## Table of contents
