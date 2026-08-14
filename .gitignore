@@ -1,0 +1,8 @@
+# Compiled programs and object files - these are rebuilt by `make`.
+bin/
+*.o
+
+# Editor and OS clutter
+*~
+.vscode/
+.DS_Store

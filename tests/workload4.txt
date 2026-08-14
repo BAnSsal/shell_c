@@ -1,0 +1,18 @@
+# A workload for the priority scheduler (the 4th column).
+#
+# A SMALLER priority number means MORE important, which is the usual convention.
+#
+# Watch two things when you run `./bin/sched priority tests/workload4.txt`:
+#
+#   1. LOW runs first even though it is the least important, because it is the
+#      only process that has arrived at time 0 and this scheduler is
+#      non-preemptive: once a process starts, nothing can take the CPU away.
+#   2. BG (the least important) is served last, and it would wait forever if
+#      important work kept arriving. That is starvation. The usual cure is
+#      "aging", and MLFQ's periodic priority boost is the same idea.
+#
+# name  arrival  burst  priority
+LOW     0        6      3
+MID     1        4      2
+HIGH    2        3      1
+BG      3        5      4
